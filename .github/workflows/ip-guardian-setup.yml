@@ -1,4 +1,4 @@
-name: IP Guardian One-Click Setup
+name: IP Guardian - Online App Builder
 
 on:
   workflow_dispatch:
@@ -10,116 +10,245 @@ permissions:
   contents: write
 
 jobs:
-  setup-and-build:
+  generate-and-build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Create IP Guardian project files
+      - name: Generate IP Guardian website, API and Android app
         shell: bash
         run: |
-          mkdir -p backend web android/app/src/main/java/com/ipguardian/app android/app/src/main/assets
-
-          cat > README.md <<'EOF'
-          # IP Guardian
-          Personal IP intelligence starter project: web dashboard, FastAPI backend, and Android WebView app.
-          See `.env.example` for optional API configuration. Never commit real API keys.
-          EOF
-
+          mkdir -p static android/app/src/main/java/com/ipguardian/app android/app/src/main/assets
           cat > requirements.txt <<'EOF'
           fastapi==0.115.6
           uvicorn[standard]==0.34.0
           requests==2.32.3
-          python-whois==0.9.5
+          dnspython==2.7.0
+          python-multipart==0.0.20
           EOF
 
-          cat > .env.example <<'EOF'
-          SHODAN_API_KEY=
-          EOF
-
-          cat > backend/main.py <<'EOF'
-          import ipaddress, socket
-          import requests
+          cat > main.py <<'PY'
+          import os, ipaddress, socket
           from fastapi import FastAPI, HTTPException
-          from fastapi.middleware.cors import CORSMiddleware
+          from fastapi.responses import FileResponse
+          from fastapi.staticfiles import StaticFiles
+          import requests, dns.resolver
 
-          app = FastAPI(title="IP Guardian API", version="1.0.1")
-          app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+          app = FastAPI(title="IP Guardian API", version="1.0.0")
+          app.mount("/static", StaticFiles(directory="static"), name="static")
+          TIMEOUT = 12
+
+          def valid_ip(value):
+              try:
+                  return str(ipaddress.ip_address(value.strip()))
+              except ValueError:
+                  raise HTTPException(400, "Invalid IPv4 or IPv6 address")
 
           @app.get("/")
-          def root():
-              return {"app": "IP Guardian", "status": "online"}
+          def home():
+              return FileResponse("static/index.html")
 
           @app.get("/api/health")
           def health():
-              return {"status": "ok"}
-
-          @app.get("/api/my-ip")
-          def my_ip():
-              try:
-                  r = requests.get("https://api.ipify.org?format=json", timeout=10)
-                  r.raise_for_status()
-                  return r.json()
-              except Exception as e:
-                  raise HTTPException(502, str(e))
+              return {"status": "online", "service": "IP Guardian"}
 
           @app.get("/api/ip/{address}")
-          def lookup_ip(address: str):
+          def ip_lookup(address: str):
+              ip = valid_ip(address)
               try:
-                  ipaddress.ip_address(address)
-                  r = requests.get(f"https://ipwho.is/{address}", timeout=15)
+                  r = requests.get(f"https://ipwho.is/{ip}", timeout=TIMEOUT)
                   r.raise_for_status()
-                  return r.json()
-              except ValueError:
-                  raise HTTPException(400, "Invalid IP address")
-              except Exception as e:
-                  raise HTTPException(502, str(e))
+                  data = r.json()
+                  if not data.get("success", False):
+                      raise HTTPException(404, data.get("message", "IP lookup failed"))
+                  return {
+                      "ip": ip, "type": data.get("type"),
+                      "continent": data.get("continent"), "country": data.get("country"),
+                      "region": data.get("region"), "city": data.get("city"),
+                      "latitude": data.get("latitude"), "longitude": data.get("longitude"),
+                      "isp": (data.get("connection") or {}).get("isp"),
+                      "org": (data.get("connection") or {}).get("org"),
+                      "asn": (data.get("connection") or {}).get("asn"),
+                      "timezone": (data.get("timezone") or {}).get("id")
+                  }
+              except requests.RequestException as e:
+                  raise HTTPException(502, f"IP data provider unavailable: {e}")
 
-          @app.get("/api/dns/{hostname}")
-          def dns(hostname: str):
+          @app.get("/api/dns/{domain}")
+          def dns_lookup(domain: str):
+              domain = domain.strip().rstrip(".")
+              if not domain or len(domain) > 253 or any(c.isspace() for c in domain):
+                  raise HTTPException(400, "Invalid domain")
+              output = {}
+              for kind in ("A", "AAAA", "MX", "NS", "TXT", "CNAME"):
+                  try:
+                      answers = dns.resolver.resolve(domain, kind, lifetime=5)
+                      output[kind] = [str(x) for x in answers]
+                  except Exception:
+                      output[kind] = []
+              return {"domain": domain, "records": output}
+
+          @app.get("/api/rdap/{address}")
+          def rdap_lookup(address: str):
+              ip = valid_ip(address)
               try:
-                  return {"hostname": hostname, "addresses": sorted({x[4][0] for x in socket.getaddrinfo(hostname, None)})}
-              except Exception as e:
-                  raise HTTPException(400, str(e))
+                  r = requests.get(f"https://rdap.org/ip/{ip}", timeout=TIMEOUT,
+                                   headers={"Accept": "application/rdap+json"})
+                  r.raise_for_status()
+                  d = r.json()
+                  return {"ip": ip, "name": d.get("name"), "handle": d.get("handle"),
+                          "country": d.get("country"), "startAddress": d.get("startAddress"),
+                          "endAddress": d.get("endAddress"), "type": d.get("type"),
+                          "remarks": d.get("remarks", [])}
+              except requests.RequestException as e:
+                  raise HTTPException(502, f"RDAP provider unavailable: {e}")
 
-          @app.get("/api/subnet/{cidr:path}")
+          @app.get("/api/subnet/{cidr}")
           def subnet(cidr: str):
               try:
-                  n = ipaddress.ip_network(cidr, strict=False)
-                  return {"network": str(n), "netmask": str(n.netmask), "broadcast": str(n.broadcast_address), "num_addresses": n.num_addresses}
+                  n = ipaddress.ip_network(cidr.strip(), strict=False)
+                  return {"network": str(n), "version": n.version, "netmask": str(n.netmask),
+                          "broadcast": str(n.broadcast_address), "first": str(n.network_address),
+                          "last": str(n.broadcast_address), "total_addresses": n.num_addresses,
+                          "usable_hosts": max(0, n.num_addresses - (2 if n.version == 4 and n.prefixlen < 31 else 0))}
               except ValueError:
-                  raise HTTPException(400, "Invalid CIDR")
-          EOF
+                  raise HTTPException(400, "Invalid network. Example: 192.168.1.0/24")
 
-          cat > web/index.html <<'EOF'
+          @app.get("/api/threat/{address}")
+          def threat(address: str):
+              ip = valid_ip(address)
+              key = os.getenv("SHODAN_API_KEY", "").strip()
+              if not key:
+                  return {"ip": ip, "provider": "Shodan", "configured": False,
+                          "message": "Add SHODAN_API_KEY to your hosting environment to enable this lookup."}
+              try:
+                  r = requests.get("https://api.shodan.io/shodan/host/" + ip,
+                                   params={"key": key}, timeout=TIMEOUT)
+                  if r.status_code == 404:
+                      return {"ip": ip, "provider": "Shodan", "configured": True,
+                              "found": False, "message": "No Shodan host record found."}
+                  r.raise_for_status()
+                  d = r.json()
+                  return {"ip": ip, "provider": "Shodan", "configured": True,
+                          "found": True, "organization": d.get("org"), "isp": d.get("isp"),
+                          "country": d.get("country_name"), "ports": d.get("ports", []),
+                          "last_update": d.get("last_update"), "hostnames": d.get("hostnames", [])}
+              except requests.RequestException as e:
+                  raise HTTPException(502, f"Shodan request failed: {e}")
+
+          @app.get("/api/bulk")
+          def bulk_lookup(ips: str):
+              values = [x.strip() for x in ips.replace("\\n", ",").split(",") if x.strip()]
+              if not values or len(values) > 20:
+                  raise HTTPException(400, "Provide 1 to 20 comma-separated IP addresses")
+              results = []
+              for value in values:
+                  try:
+                      ip = valid_ip(value)
+                      r = requests.get(f"https://ipwho.is/{ip}", timeout=TIMEOUT)
+                      d = r.json()
+                      results.append({"ip": ip, "success": d.get("success", False),
+                                      "country": d.get("country"), "city": d.get("city"),
+                                      "isp": (d.get("connection") or {}).get("isp")})
+                  except Exception as e:
+                      results.append({"ip": value, "success": False, "error": str(e)})
+              return {"count": len(results), "results": results}
+          PY
+
+          cat > static/index.html <<'HTML'
           <!doctype html>
-          <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-          <title>IP Guardian</title><style>
-          *{box-sizing:border-box}body{margin:0;background:#07111f;color:#eaf2ff;font:16px system-ui}header{padding:26px 6%;background:#101f35;border-bottom:1px solid #29415f}h1{margin:0;color:#6ee7ff}main{max-width:1000px;margin:30px auto;padding:0 18px}.panel{background:#10213a;border:1px solid #29415f;border-radius:16px;padding:22px;margin:16px 0}input,button{padding:13px;border-radius:9px;border:1px solid #385574;background:#071729;color:white}input{width:min(100%,500px)}button{background:#087eaa;cursor:pointer;margin:5px}pre{white-space:pre-wrap;overflow-wrap:anywhere;color:#a7f3d0}.muted{color:#9bb0c9}
-          </style></head><body><header><h1>IP Guardian</h1><div class="muted">Personal IP Intelligence Dashboard</div></header><main>
-          <section class="panel"><h2>IP Lookup</h2><input id="ip" placeholder="Enter an IP address"><button onclick="lookup()">Analyze IP</button><button onclick="myip()">My IP</button><pre id="out">Results will appear here.</pre></section>
-          <section class="panel"><h2>DNS Lookup</h2><input id="host" placeholder="example.com"><button onclick="dns()">Resolve DNS</button></section>
-          <section class="panel"><h2>Subnet Calculator</h2><input id="cidr" placeholder="192.168.1.0/24"><button onclick="subnet()">Calculate</button></section>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+          <meta name="theme-color" content="#071426"><title>IP Guardian</title>
+          <style>
+          *{box-sizing:border-box}body{margin:0;background:#071426;color:#eaf2ff;font:15px Arial,sans-serif}
+          header{padding:22px max(18px,calc((100% - 1100px)/2));background:#0c2038;border-bottom:1px solid #24415f}
+          h1{margin:0;color:#60d7ff}header p{margin:7px 0 0;color:#a9bdd4}
+          main{max-width:1100px;margin:24px auto;padding:0 16px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+          .card{background:#102640;border:1px solid #294765;border-radius:14px;padding:18px;margin-bottom:14px}
+          h2{font-size:17px;margin:0 0 12px;color:#8de4ff}input,textarea{width:100%;padding:12px;border-radius:8px;border:1px solid #47627e;background:#071a2e;color:white;margin:5px 0 10px}
+          button{background:#087eae;color:white;border:0;padding:11px 16px;border-radius:8px;font-weight:bold;cursor:pointer}
+          pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#061321;padding:13px;border-radius:8px;color:#bde9ff;min-height:35px}
+          .status{color:#70e0a2}.muted{color:#9db3ca;font-size:13px}
+          </style></head>
+          <body><header><h1>IP GUARDIAN</h1><p>Online IP intelligence and network information dashboard</p></header>
+          <main>
+          <div class="card"><b>System status: </b><span id="status" class="status">Checking...</span><p class="muted">Public IP intelligence only. Use monitoring and testing features only on systems you own or are authorized to assess.</p></div>
+          <div class="grid">
+          <section class="card"><h2>IP Lookup</h2><input id="ip" placeholder="IPv4 or IPv6 address"><button onclick="run('ip')">Analyze IP</button><pre id="ipout"></pre></section>
+          <section class="card"><h2>RDAP / WHOIS</h2><input id="rdapip" placeholder="IP address"><button onclick="run('rdap')">Lookup RDAP</button><pre id="rdapout"></pre></section>
+          <section class="card"><h2>Threat Intelligence</h2><input id="threatip" placeholder="IP address"><button onclick="run('threat')">Check Shodan</button><pre id="threatout"></pre></section>
+          <section class="card"><h2>DNS Lookup</h2><input id="domain" placeholder="example.com"><button onclick="run('dns')">Lookup DNS</button><pre id="dnsout"></pre></section>
+          <section class="card"><h2>Subnet Calculator</h2><input id="cidr" placeholder="192.168.1.0/24"><button onclick="run('subnet')">Calculate</button><pre id="subnetout"></pre></section>
+          <section class="card"><h2>Bulk IP Analyzer</h2><textarea id="bulkips" rows="3" placeholder="8.8.8.8, 1.1.1.1"></textarea><button onclick="run('bulk')">Analyze up to 20 IPs</button><pre id="bulkout"></pre></section>
+          </div>
+          <p class="muted">IP Guardian • Free-first edition • Data is supplied by third-party providers and may be incomplete or delayed.</p>
+          </main>
           <script>
-          const API=location.protocol==='file:'?'https://YOUR-BACKEND-URL':'';
-          async function call(path){try{let r=await fetch(API+path);let j=await r.json();document.getElementById('out').textContent=JSON.stringify(j,null,2)}catch(e){document.getElementById('out').textContent='Backend connection required: '+e}}
-          function lookup(){call('/api/ip/'+encodeURIComponent(document.getElementById('ip').value))}
-          function myip(){call('/api/my-ip')}
-          function dns(){call('/api/dns/'+encodeURIComponent(document.getElementById('host').value))}
-          function subnet(){call('/api/subnet/'+encodeURIComponent(document.getElementById('cidr').value))}
-          </script></main></body></html>
-          EOF
+          async function api(path){let r=await fetch(path);let d=await r.json();if(!r.ok)throw Error(d.detail||'Request failed');return d}
+          async function run(kind){let map={ip:['ip','ipout'],rdap:['rdapip','rdapout'],threat:['threatip','threatout'],dns:['domain','dnsout'],subnet:['cidr','subnetout']};
+          let path='',out='';if(kind==='bulk'){path='/api/bulk?ips='+encodeURIComponent(document.getElementById('bulkips').value);out='bulkout'}
+          else{let [field,target]=map[kind];let val=document.getElementById(field).value.trim();if(!val)return;path='/api/'+kind+'/'+encodeURIComponent(val);out=target}
+          document.getElementById(out).textContent='Loading...';try{document.getElementById(out).textContent=JSON.stringify(await api(path),null,2)}catch(e){document.getElementById(out).textContent='Error: '+e.message}}
+          api('/api/health').then(x=>document.getElementById('status').textContent='ONLINE').catch(()=>document.getElementById('status').textContent='OFFLINE');
+          </script></body></html>
+          HTML
+
+          cat > render.yaml <<'YAML'
+          services:
+            - type: web
+              name: ip-guardian
+              runtime: python
+              plan: free
+              buildCommand: pip install -r requirements.txt
+              startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+              healthCheckPath: /api/health
+              envVars:
+                - key: PYTHON_VERSION
+                  value: 3.11.9
+                - key: SHODAN_API_KEY
+                  sync: false
+          YAML
+
+          cat > README.md <<'MD'
+          # IP Guardian
+
+          Free-first online IP intelligence dashboard with FastAPI backend and Android WebView wrapper.
+
+          ## Deploy online
+          1. Push this repository to GitHub.
+          2. Open https://render.com and create a new Blueprint from this repository.
+          3. Render reads `render.yaml`. Deploy the `ip-guardian` web service.
+          4. Optional: add your own Shodan API key as `SHODAN_API_KEY` in the Render service environment.
+          5. Open the Render service URL. The dashboard and API are served from the same URL.
+
+          ## Android
+          The Android app opens the hosted dashboard. Before building, replace `https://YOUR-RENDER-SERVICE.onrender.com`
+          in `android/app/src/main/java/com/ipguardian/app/MainActivity.java` with your actual Render URL.
+          Then run the GitHub Actions workflow and download the APK artifact.
+
+          ## Notes
+          - Free hosting may sleep when idle and may have usage limits.
+          - Third-party IP/DNS/RDAP services have their own rate limits and privacy policies.
+          - Shodan requires a valid API key. Keep it in hosting environment secrets; never commit it to source.
+          - This app provides public IP intelligence. It does not perform stealth monitoring, unauthorized access, or port scanning.
+          MD
 
           cat > android/settings.gradle <<'EOF'
           pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
           dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
           rootProject.name = "IPGuardian"
-          include(":app")
+          include ':app'
           EOF
 
           cat > android/build.gradle <<'EOF'
-          plugins { id 'com.android.application' version '8.7.3' apply false }
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
           EOF
 
           cat > android/gradle.properties <<'EOF'
@@ -132,16 +261,25 @@ jobs:
           android {
               namespace 'com.ipguardian.app'
               compileSdk 35
-              defaultConfig { applicationId 'com.ipguardian.app'; minSdk 23; targetSdk 35; versionCode 1; versionName '1.0' }
+              defaultConfig {
+                  applicationId 'com.ipguardian.app'
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 1
+                  versionName '1.0'
+              }
           }
           EOF
 
           cat > android/app/src/main/AndroidManifest.xml <<'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET"/>
-              <application android:theme="@android:style/Theme.Material.Light.NoActionBar" android:label="IP Guardian">
+              <application android:theme="@android:style/Theme.Material.Light.NoActionBar" android:label="IP Guardian" android:usesCleartextTraffic="false">
                   <activity android:name=".MainActivity" android:exported="true">
-                      <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
                   </activity>
               </application>
           </manifest>
@@ -153,26 +291,27 @@ jobs:
           import android.os.Bundle;
           import android.webkit.WebView;
           import android.webkit.WebViewClient;
+          import android.webkit.WebChromeClient;
+          import android.widget.Toast;
+          import android.webkit.WebResourceRequest;
+
           public class MainActivity extends Activity {
-              @Override public void onCreate(Bundle b) {
-                  super.onCreate(b);
-                  WebView w = new WebView(this);
-                  w.getSettings().setJavaScriptEnabled(true);
-                  w.setWebViewClient(new WebViewClient());
-                  w.loadUrl("file:///android_asset/index.html");
-                  setContentView(w);
+              private static final String DASHBOARD_URL = "https://YOUR-RENDER-SERVICE.onrender.com";
+              @Override public void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  WebView web = new WebView(this);
+                  web.getSettings().setJavaScriptEnabled(true);
+                  web.getSettings().setDomStorageEnabled(true);
+                  web.setWebViewClient(new WebViewClient());
+                  web.setWebChromeClient(new WebChromeClient());
+                  setContentView(web);
+                  if (DASHBOARD_URL.contains("YOUR-RENDER-SERVICE")) {
+                      Toast.makeText(this, "Set your Render URL in MainActivity.java before building.", Toast.LENGTH_LONG).show();
+                  }
+                  web.loadUrl(DASHBOARD_URL);
               }
           }
           EOF
-          cp web/index.html android/app/src/main/assets/index.html
-
-      - name: Commit generated project files
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md requirements.txt .env.example backend web android
-          git commit -m "Generate IP Guardian project" || echo "No changes to commit"
-          git push
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -180,28 +319,34 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK and accept licenses
-        uses: android-actions/setup-android@v4
-        with:
-          accept-android-sdk-licenses: true
-          log-accepted-android-sdk-licenses: false
-          packages: platform-tools
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.9"
-
-      - name: Install Android build packages
-        run: sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
+          gradle-version: 8.9
 
       - name: Build Android APK
         working-directory: android
-        run: gradle --no-daemon assembleDebug
+        run: |
+          gradle wrapper --gradle-version 8.9
+          ./gradlew assembleDebug
 
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: IP-Guardian-debug-apk
+          name: IP-Guardian-debug-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: Commit generated files
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add requirements.txt main.py static android render.yaml README.md
+          if git diff --cached --quiet; then
+            echo "No generated changes to commit."
+            exit 0
+          fi
+          git commit -m "Generate IP Guardian online dashboard and Android app"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
