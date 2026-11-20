@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IP Guardian</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#07111f;color:#eaf2ff;font:16px system-ui}header{padding:26px 6%;background:#101f35;border-bottom:1px solid #29415f}h1{margin:0;color:#6ee7ff}main{max-width:1000px;margin:30px auto;padding:0 18px}.panel{background:#10213a;border:1px solid #29415f;border-radius:16px;padding:22px;margin:16px 0}input,button{padding:13px;border-radius:9px;border:1px solid #385574;background:#071729;color:white}input{width:min(100%,500px)}button{background:#087eaa;cursor:pointer;margin:5px}pre{white-space:pre-wrap;overflow-wrap:anywhere;color:#a7f3d0}.muted{color:#9bb0c9}
+</style></head><body><header><h1>IP Guardian</h1><div class="muted">Personal IP Intelligence Dashboard</div></header><main>
+<section class="panel"><h2>IP Lookup</h2><input id="ip" placeholder="Enter an IP address"><button onclick="lookup()">Analyze IP</button><button onclick="myip()">My IP</button><pre id="out">Results will appear here.</pre></section>
+<section class="panel"><h2>DNS Lookup</h2><input id="host" placeholder="example.com"><button onclick="dns()">Resolve DNS</button></section>
+<section class="panel"><h2>Subnet Calculator</h2><input id="cidr" placeholder="192.168.1.0/24"><button onclick="subnet()">Calculate</button></section>
+<script>
+const API=location.hostname==='localhost'?'http://localhost:8000':'';
+async function call(path){let r=await fetch(API+path);let j=await r.json();document.getElementById('out').textContent=JSON.stringify(j,null,2)}
+function lookup(){call('/api/ip/'+encodeURIComponent(document.getElementById('ip').value))}
+function myip(){call('/api/my-ip')}
+function dns(){call('/api/dns/'+encodeURIComponent(document.getElementById('host').value))}
+function subnet(){call('/api/subnet/'+encodeURIComponent(document.getElementById('cidr').value))}
+</script></main></body></html>
