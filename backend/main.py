@@ -3,7 +3,7 @@ import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="IP Guardian API", version="1.0.0")
+app = FastAPI(title="IP Guardian API", version="1.0.1")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
@@ -17,7 +17,9 @@ def health():
 @app.get("/api/my-ip")
 def my_ip():
     try:
-        return requests.get("https://api.ipify.org?format=json", timeout=10).json()
+        r = requests.get("https://api.ipify.org?format=json", timeout=10)
+        r.raise_for_status()
+        return r.json()
     except Exception as e:
         raise HTTPException(502, str(e))
 
