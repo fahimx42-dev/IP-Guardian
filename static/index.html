@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#071426"><title>IP Guardian</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#071426;color:#eaf2ff;font:15px Arial,sans-serif}
+header{padding:22px max(18px,calc((100% - 1100px)/2));background:#0c2038;border-bottom:1px solid #24415f}
+h1{margin:0;color:#60d7ff}header p{margin:7px 0 0;color:#a9bdd4}
+main{max-width:1100px;margin:24px auto;padding:0 16px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+.card{background:#102640;border:1px solid #294765;border-radius:14px;padding:18px;margin-bottom:14px}
+h2{font-size:17px;margin:0 0 12px;color:#8de4ff}input,textarea{width:100%;padding:12px;border-radius:8px;border:1px solid #47627e;background:#071a2e;color:white;margin:5px 0 10px}
+button{background:#087eae;color:white;border:0;padding:11px 16px;border-radius:8px;font-weight:bold;cursor:pointer}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#061321;padding:13px;border-radius:8px;color:#bde9ff;min-height:35px}
+.status{color:#70e0a2}.muted{color:#9db3ca;font-size:13px}
+</style></head>
+<body><header><h1>IP GUARDIAN</h1><p>Online IP intelligence and network information dashboard</p></header>
+<main>
+<div class="card"><b>System status: </b><span id="status" class="status">Checking...</span><p class="muted">Public IP intelligence only. Use monitoring and testing features only on systems you own or are authorized to assess.</p></div>
+<div class="grid">
+<section class="card"><h2>IP Lookup</h2><input id="ip" placeholder="IPv4 or IPv6 address"><button onclick="run('ip')">Analyze IP</button><pre id="ipout"></pre></section>
+<section class="card"><h2>RDAP / WHOIS</h2><input id="rdapip" placeholder="IP address"><button onclick="run('rdap')">Lookup RDAP</button><pre id="rdapout"></pre></section>
+<section class="card"><h2>Threat Intelligence</h2><input id="threatip" placeholder="IP address"><button onclick="run('threat')">Check Shodan</button><pre id="threatout"></pre></section>
+<section class="card"><h2>DNS Lookup</h2><input id="domain" placeholder="example.com"><button onclick="run('dns')">Lookup DNS</button><pre id="dnsout"></pre></section>
+<section class="card"><h2>Subnet Calculator</h2><input id="cidr" placeholder="192.168.1.0/24"><button onclick="run('subnet')">Calculate</button><pre id="subnetout"></pre></section>
+<section class="card"><h2>Bulk IP Analyzer</h2><textarea id="bulkips" rows="3" placeholder="8.8.8.8, 1.1.1.1"></textarea><button onclick="run('bulk')">Analyze up to 20 IPs</button><pre id="bulkout"></pre></section>
+</div>
+<p class="muted">IP Guardian • Free-first edition • Data is supplied by third-party providers and may be incomplete or delayed.</p>
+</main>
+<script>
+async function api(path){let r=await fetch(path);let d=await r.json();if(!r.ok)throw Error(d.detail||'Request failed');return d}
+async function run(kind){let map={ip:['ip','ipout'],rdap:['rdapip','rdapout'],threat:['threatip','threatout'],dns:['domain','dnsout'],subnet:['cidr','subnetout']};
+let path='',out='';if(kind==='bulk'){path='/api/bulk?ips='+encodeURIComponent(document.getElementById('bulkips').value);out='bulkout'}
+else{let [field,target]=map[kind];let val=document.getElementById(field).value.trim();if(!val)return;path='/api/'+kind+'/'+encodeURIComponent(val);out=target}
+document.getElementById(out).textContent='Loading...';try{document.getElementById(out).textContent=JSON.stringify(await api(path),null,2)}catch(e){document.getElementById(out).textContent='Error: '+e.message}}
+api('/api/health').then(x=>document.getElementById('status').textContent='ONLINE').catch(()=>document.getElementById('status').textContent='OFFLINE');
+</script></body></html>

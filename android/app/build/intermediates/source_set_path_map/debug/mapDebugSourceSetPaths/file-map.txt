@@ -1,0 +1,7 @@
+com.ipguardian.app-pngs-0 /home/runner/work/IP-Guardian/IP-Guardian/android/app/build/generated/res/pngs/debug
+com.ipguardian.app-resValues-1 /home/runner/work/IP-Guardian/IP-Guardian/android/app/build/generated/res/resValues/debug
+com.ipguardian.app-packageDebugResources-2 /home/runner/work/IP-Guardian/IP-Guardian/android/app/build/intermediates/incremental/debug/packageDebugResources/merged.dir
+com.ipguardian.app-packageDebugResources-3 /home/runner/work/IP-Guardian/IP-Guardian/android/app/build/intermediates/incremental/debug/packageDebugResources/stripped.dir
+com.ipguardian.app-debug-4 /home/runner/work/IP-Guardian/IP-Guardian/android/app/build/intermediates/merged_res/debug/mergeDebugResources
+com.ipguardian.app-debug-5 /home/runner/work/IP-Guardian/IP-Guardian/android/app/src/debug/res
+com.ipguardian.app-main-6 /home/runner/work/IP-Guardian/IP-Guardian/android/app/src/main/res
